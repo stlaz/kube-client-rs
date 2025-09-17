@@ -1,20 +1,22 @@
-use crate::{rest::RestClient};
 use k8s_openapi::serde;
 
-use k8s_openapi::api::core::v1::{Pod, Namespace, Service, ConfigMap, Secret};
+use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Pod, Secret, Service};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+use apimachinery::watch::ResourceWatcher;
+
+use crate::rest::RestClient;
 
 pub struct CoreV1Client<'c> {
-    rest_client: &'c crate::rest::RestClient,
+    rest_client: &'c RestClient,
 }
 
 impl<'c> CoreV1Client<'c> {
-    pub fn new(rest_client: &'c crate::rest::RestClient) -> Self {
-        CoreV1Client {
-            rest_client,
-        }
+    pub fn new(rest_client: &'c RestClient) -> Self {
+        CoreV1Client { rest_client }
     }
 
-    pub fn rest_client(&self) -> &crate::rest::RestClient {
+    pub fn rest_client(&self) -> &RestClient {
         self.rest_client
     }
 
@@ -43,7 +45,10 @@ pub struct ResourceClient<'c, T> {
     base_path: String,
 }
 
-impl<'c, T> ResourceClient<'c, T> {
+impl<'c, T> ResourceClient<'c, T>
+where
+    T: serde::de::DeserializeOwned + k8s_openapi::Metadata<Ty = ObjectMeta>,
+{
     pub fn new(client: &'c RestClient, resource_plural: String, namespace: Option<String>) -> Self {
         Self {
             _client_type: std::marker::PhantomData,
@@ -55,11 +60,44 @@ impl<'c, T> ResourceClient<'c, T> {
             },
         }
     }
-    pub fn get(&self, name: &str) -> Result<T, reqwest::Error> where T: serde::de::DeserializeOwned {
-        let resp = self.rest_client.get(
-            format!("{}/{}/{}", self.base_path, self.resource_plural, name)
-        )?.error_for_status()?;
+    pub fn get(&self, name: &str) -> Result<T, reqwest::Error> {
+        let resp = self
+            .rest_client
+            .get(format!(
+                "{}/{}/{}",
+                self.base_path, self.resource_plural, name
+            ))?
+            .error_for_status()?;
         Ok(resp.json::<T>()?)
+    }
+
+    pub fn watch(&self, name: &str) -> Result<impl ResourceWatcher<T>, reqwest::Error> {
+        let pre_resp = self
+            .rest_client
+            .get(format!(
+                "{}/{}/{}",
+                self.base_path, self.resource_plural, name
+            ))?
+            .error_for_status()?;
+
+        let pre_obj: T = pre_resp.json()?;
+        let resource_version = pre_obj
+            .metadata()
+            .resource_version
+            .clone()
+            .unwrap_or_default(); // TODO: missing resourceVersion probably deserves its own error, however we cannot just create a new reqwest::Error it seems
+
+        let resp = self
+            .rest_client
+            .start_watch(
+                format!("{}/{}", self.base_path, self.resource_plural),
+                name.to_string(),
+                resource_version,
+            )?
+            .error_for_status()?;
+
+        let reader = std::io::BufReader::new(resp);
+        Ok(apimachinery::watch::StreamWatcher::new(reader))
     }
 }
 
@@ -84,7 +122,11 @@ fn new_service_client<'c>(client: &'c RestClient, namespace: &str) -> ServiceCli
 pub type ConfigMapClient<'c> = ResourceClient<'c, ConfigMap>;
 
 fn new_configmap_client<'c>(client: &'c RestClient, namespace: &str) -> ConfigMapClient<'c> {
-    ResourceClient::new(client, "configmaps".to_string(), Some(namespace.to_string()))
+    ResourceClient::new(
+        client,
+        "configmaps".to_string(),
+        Some(namespace.to_string()),
+    )
 }
 
 pub type SecretClient<'c> = ResourceClient<'c, Secret>;

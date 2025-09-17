@@ -1,5 +1,5 @@
-use reqwest::blocking::{ClientBuilder, Client, Request, Response};
-use reqwest::{ Result, Url};
+use reqwest::blocking::{Client, ClientBuilder, Request, Response};
+use reqwest::{Result, Url};
 
 use std::sync::Arc;
 
@@ -34,8 +34,29 @@ impl RestClient {
     }
 
     pub fn get(&self, path: String) -> Result<Response> {
-        let url = Url::parse(&format!("{}{}", self.base_url, path))
-            .expect("Failed to parse URL");
+        let url = Url::parse(&format!("{}{}", self.base_url, path)).expect("Failed to parse URL");
+        let req = Request::new(reqwest::Method::GET, url);
+        self.transport.round_trip(req)
+    }
+
+    // Send a GET request with watch=true parameter
+    //
+    // Returns a response with a streaming body
+    pub fn start_watch(
+        &self,
+        path: String,
+        resource_name: String,
+        resource_version: String,
+    ) -> Result<Response> {
+        let mut url =
+            Url::parse(&format!("{}{}", self.base_url, path)).expect("Failed to parse URL");
+        // FIXME: might need to do GET first and then set resourceVersion from there
+        // FIXME: only add the field selector to res name if the name is not empty?
+        url.query_pairs_mut()
+            .append_pair("fieldSelector", &format!("metadata.name={}", resource_name))
+            .append_pair("resourceVersion", &resource_version)
+            .append_pair("watch", "true");
+
         let req = Request::new(reqwest::Method::GET, url);
         self.transport.round_trip(req)
     }
@@ -68,13 +89,18 @@ impl RoundTripper for BearerTokenClient {
 }
 
 pub fn rest_client_for(config: &Config) -> RestClient {
-    let rt: DynamicRoundTripper = Arc::new(
-        HTTPClient { client: ClientBuilder::new()
-            .user_agent(config.user_agent.clone().unwrap_or_else(|| "kube-client-rs".to_string()))
+    let rt: DynamicRoundTripper = Arc::new(HTTPClient {
+        client: ClientBuilder::new()
+            .user_agent(
+                config
+                    .user_agent
+                    .clone()
+                    .unwrap_or_else(|| "kube-client-rs".to_string()),
+            )
             .danger_accept_invalid_certs(true) // FIXME
             .build()
-            .expect("Failed to build HTTP client") }
-    );
+            .expect("Failed to build HTTP client"),
+    });
 
     let rt = if let Some(token) = &config.bearer_token {
         Arc::new(BearerTokenClient::new(rt, token))
