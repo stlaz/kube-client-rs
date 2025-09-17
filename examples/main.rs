@@ -1,5 +1,4 @@
-
-use client_rs::{corev1::CoreV1Client};
+use client_rs::corev1::CoreV1Client;
 use client_rs::rest;
 
 use clap::Parser;
@@ -19,7 +18,6 @@ struct Options {
 
     #[arg(short, long, env = "KUBE_TOKEN")]
     token: String,
-
 }
 
 fn main() {
@@ -31,7 +29,16 @@ fn main() {
     });
 
     let corev1_client = CoreV1Client::new(&rest_client);
-    let resp = corev1_client.pods(&opts.namespace).get(&opts.pod)
+    let resp = corev1_client
+        .pods(&opts.namespace)
+        .get(&opts.pod)
         .expect("Failed to get pod");
-    print!("Response: {:#?}", resp);
+    println!("Response: {:#?}", resp);
+
+    let resp2 = corev1_client
+        .pods(&opts.namespace)
+        .list()
+        .expect("Failed to list pods");
+
+    println!("Response: {:#?}", resp2);
 }

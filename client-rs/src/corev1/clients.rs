@@ -1,5 +1,8 @@
+use std::ops::Deref;
+
 use k8s_openapi::serde;
 
+use k8s_openapi::List;
 use k8s_openapi::api::core::v1::{ConfigMap, Namespace, Pod, Secret, Service};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
@@ -43,6 +46,42 @@ pub struct ResourceClient<'c, T> {
     rest_client: &'c RestClient,
     resource_plural: String,
     base_path: String,
+}
+
+pub struct ResourceClientWithList<'c, T> {
+    _client_type: std::marker::PhantomData<T>,
+
+    resource_client: ResourceClient<'c, T>,
+}
+
+impl<'c, T> ResourceClientWithList<'c, T>
+where
+    T: serde::de::DeserializeOwned
+        + k8s_openapi::Metadata<Ty = ObjectMeta>
+        + k8s_openapi::ListableResource,
+{
+    pub fn new(client: &'c RestClient, resource_plural: String, namespace: Option<String>) -> Self {
+        Self {
+            _client_type: std::marker::PhantomData,
+            resource_client: ResourceClient::new(client, resource_plural, namespace),
+        }
+    }
+
+    pub fn list(&self) -> Result<List<T>, reqwest::Error> {
+        let resp = self
+            .rest_client
+            .get(format!("{}/{}", self.base_path, self.resource_plural))?
+            .error_for_status()?;
+        Ok(resp.json::<List<T>>()?)
+    }
+}
+
+// implement Deref to automatically deref method calls to internal ResourceClient
+impl<'c, T> Deref for ResourceClientWithList<'c, T> {
+    type Target = ResourceClient<'c, T>;
+    fn deref(&self) -> &Self::Target {
+        &self.resource_client
+    }
 }
 
 impl<'c, T> ResourceClient<'c, T>
@@ -101,36 +140,36 @@ where
     }
 }
 
-pub type NamespaceClient<'c> = ResourceClient<'c, Namespace>;
+pub type NamespaceClient<'c> = ResourceClientWithList<'c, Namespace>;
 
-fn new_namespace_client<'c>(client: &'c RestClient) -> ResourceClient<'c, Namespace> {
-    ResourceClient::new(client, "namespaces".to_string(), None)
+fn new_namespace_client<'c>(client: &'c RestClient) -> ResourceClientWithList<'c, Namespace> {
+    ResourceClientWithList::new(client, "namespaces".to_string(), None)
 }
 
-pub type PodClient<'c> = ResourceClient<'c, Pod>;
+pub type PodClient<'c> = ResourceClientWithList<'c, Pod>;
 
-fn new_pod_client<'c>(client: &'c RestClient, namespace: &str) -> ResourceClient<'c, Pod> {
-    ResourceClient::new(client, "pods".to_string(), Some(namespace.to_string()))
+fn new_pod_client<'c>(client: &'c RestClient, namespace: &str) -> ResourceClientWithList<'c, Pod> {
+    ResourceClientWithList::new(client, "pods".to_string(), Some(namespace.to_string()))
 }
 
-pub type ServiceClient<'c> = ResourceClient<'c, Service>;
+pub type ServiceClient<'c> = ResourceClientWithList<'c, Service>;
 
 fn new_service_client<'c>(client: &'c RestClient, namespace: &str) -> ServiceClient<'c> {
-    ResourceClient::new(client, "services".to_string(), Some(namespace.to_string()))
+    ResourceClientWithList::new(client, "services".to_string(), Some(namespace.to_string()))
 }
 
-pub type ConfigMapClient<'c> = ResourceClient<'c, ConfigMap>;
+pub type ConfigMapClient<'c> = ResourceClientWithList<'c, ConfigMap>;
 
 fn new_configmap_client<'c>(client: &'c RestClient, namespace: &str) -> ConfigMapClient<'c> {
-    ResourceClient::new(
+    ResourceClientWithList::new(
         client,
         "configmaps".to_string(),
         Some(namespace.to_string()),
     )
 }
 
-pub type SecretClient<'c> = ResourceClient<'c, Secret>;
+pub type SecretClient<'c> = ResourceClientWithList<'c, Secret>;
 
 fn new_secret_client<'c>(client: &'c RestClient, namespace: &str) -> SecretClient<'c> {
-    ResourceClient::new(client, "secrets".to_string(), Some(namespace.to_string()))
+    ResourceClientWithList::new(client, "secrets".to_string(), Some(namespace.to_string()))
 }
